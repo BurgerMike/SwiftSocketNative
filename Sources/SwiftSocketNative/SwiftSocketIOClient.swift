@@ -14,6 +14,10 @@ public final class SwiftSocketIOClient: SocketClient {
     private var reconnectAttempts = 0
     private let maxReconnectAttempts = 5
     private let reconnectInterval: TimeInterval = 3
+    // Variables internas para imprimir solo una vez por tipo de evento
+    private var hasLoggedConnect = false
+    private var hasLoggedDisconnect = false
+    private var hasLoggedError = false
 
     public init(url: URL, path: String = "/socket.io", namespace: String = "/", auth: [String: String] = [:]) {
         self.url = url
@@ -145,6 +149,29 @@ public final class SwiftSocketIOClient: SocketClient {
     }
 
     private func notifySystem(event: String, data: Any) {
+        switch event {
+        case "connect":
+            if !hasLoggedConnect {
+                print("✅ [Socket] Conectado al servidor")
+                hasLoggedConnect = true
+                hasLoggedDisconnect = false
+                hasLoggedError = false
+            }
+        case "disconnect":
+            if !hasLoggedDisconnect {
+                print("🔌 [Socket] Desconectado del servidor")
+                hasLoggedDisconnect = true
+                hasLoggedConnect = false
+            }
+        case "connect_error":
+            if !hasLoggedError {
+                print("❌ [Socket] Error de conexión: \(data)")
+                hasLoggedError = true
+            }
+        default:
+            break
+        }
+
         systemListeners[event]?.forEach { $0(data) }
     }
 
