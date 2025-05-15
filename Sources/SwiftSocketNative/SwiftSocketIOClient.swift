@@ -11,6 +11,8 @@ public final class SwiftSocketIOClient: SocketClient {
     private var listeners: [String: [(Any) -> Void]] = [:]
     private var systemListeners: [String: [(Any) -> Void]] = [:]
     private var isConnected = false
+private var isConnecting = false
+private var hasConnected = false
     private var reconnectAttempts = 0
     private let maxReconnectAttempts = 5
     private let reconnectInterval: TimeInterval = 3
@@ -27,6 +29,11 @@ public final class SwiftSocketIOClient: SocketClient {
     }
 
     public func connect() {
+        guard !isConnecting else {
+            print("⚠️ Ya hay un intento de conexión en curso.")
+            return
+        }
+        isConnecting = true
         var components = URLComponents(url: url, resolvingAgainstBaseURL: false)!
         components.path = path + namespace
         components.queryItems = [
@@ -60,12 +67,18 @@ public final class SwiftSocketIOClient: SocketClient {
     }
 
     public func disconnect() {
+        isConnecting = false
+        hasConnected = false
         webSocket?.cancel(with: .goingAway, reason: nil)
         isConnected = false
         notifySystem(event: "disconnect", data: "User disconnected")
     }
 
     public func emit(event: String, data: Encodable?, ack: ((Any?) -> Void)?) {
+        guard isConnected else {
+            print("❌ No se puede emitir '\(event)' — socket no conectado.")
+            return
+        }
         var payload: [Any] = [event]
         if let data = data {
             if let encoded = try? JSONEncoder().encode(data),
@@ -176,7 +189,11 @@ public final class SwiftSocketIOClient: SocketClient {
     }
 
     private func sendRaw(_ string: String) {
-        webSocket?.send(.string(string)) { error in
+        guard let ws = webSocket else {
+            print("❌ WebSocket no está disponible para enviar.")
+            return
+        }
+        ws.send(.string(string)) { error in
             if let error = error {
                 self.notifySystem(event: "error", data: error)
             }
