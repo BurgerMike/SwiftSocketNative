@@ -6,53 +6,56 @@
 //
 import Foundation
 
-// MARK: - Protocolo principal del cliente Socket
+// MARK: - Protocolos
 
-/// Define las funciones básicas para conectarse a un servidor WebSocket tipo socket.io.
+/// Protocolo base para un cliente de sockets nativo en Swift.
 public protocol SocketClient {
-    /// Conecta el socket al servidor.
+    /// Inicia la conexión con el servidor.
     func connect()
 
-    /// Cierra la conexión con el servidor.
+    /// Cierra la conexión.
     func disconnect()
 
-    /// Envía un evento al servidor con datos opcionales y soporte para ACK.
-    func emit(event: String, data: Encodable?, ack: ((Any?) -> Void)?)
+    /// Envía un evento con datos opcionales y maneja respuesta ACK si aplica.
+    func emit<T: Encodable>(event: String, data: T?, ack: ((Result<Void, SocketError>) -> Void)?)
 
-    /// Escucha un evento específico desde el servidor.
+    /// Escucha un evento personalizado del servidor.
     func on(event: String, callback: @escaping (Any) -> Void)
 
-    /// Elimina todos los listeners de un evento específico.
+    /// Escucha eventos internos del sistema (como connect, disconnect, error).
+    func onSystem(event: String, callback: @escaping (Any) -> Void)
+
+    /// Elimina el listener para un evento.
     func off(event: String)
 }
 
-// MARK: - Protocolo para manejar errores
-
-/// Permite al cliente notificar errores personalizados a quien lo use.
-public protocol SocketErrorHandler: AnyObject {
-    func socketDidCatchError(_ error: SocketError)
+public protocol SocketEventRepresentable {
+    var event: String { get }
+    var payload: Data? { get }
+    var namespace: String? { get }
 }
 
-// MARK: - Errores definidos para el sistema de sockets
+
+public protocol AckHandler {
+    func addAck(id: String, timeout: TimeInterval, callback: @escaping (Result<Any?, SocketError>) -> Void)
+    func resolveAck(id: String, with data: Any?)
+    func failAck(id: String, error: SocketError)
+    func cancelAll()
+}
+
+/// Protocolo que representa un mensaje que se puede emitir por el socket.
+public protocol OutgoingMessageRepresentable {
+    var event: String { get }
+    var payload: Data? { get }
+    var recipientId: String? { get }
+    var metadata: [String: String]? { get }
+}
 
 
-
-// MARK: - Protocolo de recepción de mensajes
-
-/// Define la estructura que debe tener un mensaje recibido en el chat.
-public protocol MessageReceivable: Codable {
-    var messageId: String { get }
+public protocol IncomingMessageRepresentable {
+    var event: String { get }
     var content: String { get }
     var senderId: String { get }
     var timestamp: Date { get }
-}
-
-
-
-// MARK: - Protocolo de envío de mensajes
-
-/// Define la estructura mínima que debe tener un mensaje a enviar.
-public protocol MessageSendable: Encodable {
-    var content: String { get }
-    var recipientId: String { get }
+    var metadata: [String: String]? { get }
 }
