@@ -229,43 +229,45 @@ final class URLSessionEngineIOClient: EngineIOClient {
         }
     }
 
-    func listen(onMessage: @escaping (String) -> Void) {
-        socket?.receive { [weak self] result in
-            guard let self = self else { return }
-            switch result {
-            case .success(let message):
-                switch message {
-                case .string(let text):
-                    onMessage(text)
-                case .data(let data):
-                    if let string = String(data: data, encoding: .utf8) {
-                        onMessage(string)
-                    } else {
-                        print("⚠️ Mensaje binario no interpretable")
+        func listen(onMessage: @escaping (String) -> Void) {
+            socket?.receive { [weak self] result in
+                guard let self = self else { return }
+                switch result {
+                case .success(let message):
+                    self.reconnectAttempts = 0 // ✅ Reset de intentos en caso de éxito
+                    switch message {
+                    case .string(let text):
+                        onMessage(text)
+                    case .data(let data):
+                        if let string = String(data: data, encoding: .utf8) {
+                            onMessage(string)
+                        } else {
+                            print("⚠️ Mensaje binario no interpretable")
+                        }
+                    default:
+                        break
                     }
-                default:
-                    break // Ya no intentamos usar `.pong`
-                }
-            case .failure(let error):
-                print("❌ Error al recibir mensaje:", error)
-                
-                SwiftSocketIOClient.sharedNotifySystem(event: "connect_error", data: error.localizedDescription)
-                self.reconnectAttempts += 1
-                if self.reconnectAttempts <= self.maxReconnectAttempts {
-                    print("🔁 Reintentando conexión... (\(self.reconnectAttempts))")
-                    SwiftSocketIOClient.sharedNotifySystem(event: "reconnect_attempt", data: self.reconnectAttempts)
-                    let reconnectDelay = self.reconnectDelay
-                    
-                } else {
-                    let errorMessage = "Falló reconexión después de \(self.reconnectAttempts) intentos."
-                    SwiftSocketIOClient.sharedNotifySystem(event: "reconnect_failed", data: errorMessage)
-                    print("❌ \(errorMessage)")
+                    self.listen(onMessage: onMessage) // 🔁 continuar normalmente
+
+                case .failure(let error):
+                    if self.reconnectAttempts < self.maxReconnectAttempts {
+                        self.reconnectAttempts += 1
+                        print("❌ Error al recibir mensaje: \(error.localizedDescription)")
+                        print("🔁 Reintentando conexión en \(self.reconnectDelay)s... (\(self.reconnectAttempts))")
+                        SwiftSocketIOClient.sharedNotifySystem(event: "connect_error", data: error.localizedDescription)
+                        SwiftSocketIOClient.sharedNotifySystem(event: "reconnect_attempt", data: self.reconnectAttempts)
+                        
+                        DispatchQueue.main.asyncAfter(deadline: .now() + self.reconnectDelay) {
+                            self.listen(onMessage: onMessage)
+                        }
+                    } else {
+                        let errorMessage = "❌ Falló reconexión después de \(self.reconnectAttempts) intentos."
+                        SwiftSocketIOClient.sharedNotifySystem(event: "reconnect_failed", data: errorMessage)
+                        print(errorMessage)
+                    }
                 }
             }
-
-            self.listen(onMessage: onMessage) // Reanuda el bucle de escucha
         }
-    }
 
     func disconnect() {
         stopPing()
