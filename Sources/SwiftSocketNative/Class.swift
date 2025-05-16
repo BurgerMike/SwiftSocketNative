@@ -251,12 +251,14 @@ final class URLSessionEngineIOClient: EngineIOClient {
 
                 case .failure(let error):
                     if self.reconnectAttempts < self.maxReconnectAttempts {
+                        if self.reconnectAttempts == 0 {
+                            print("❌ Error al recibir mensaje: \(error.localizedDescription)")
+                            SwiftSocketIOClient.sharedNotifySystem(event: "connect_error", data: error.localizedDescription)
+                        }
                         self.reconnectAttempts += 1
-                        print("❌ Error al recibir mensaje: \(error.localizedDescription)")
                         print("🔁 Reintentando conexión en \(self.reconnectDelay)s... (\(self.reconnectAttempts))")
-                        SwiftSocketIOClient.sharedNotifySystem(event: "connect_error", data: error.localizedDescription)
                         SwiftSocketIOClient.sharedNotifySystem(event: "reconnect_attempt", data: self.reconnectAttempts)
-                        
+
                         DispatchQueue.main.asyncAfter(deadline: .now() + self.reconnectDelay) {
                             self.listen(onMessage: onMessage)
                         }
