@@ -55,7 +55,15 @@ public final class SwiftSocketIOClient: SocketClient {
             notifySystem(event: "connect_skipped", data: "Ya hay conexión activa.")
             return
         }
-        let finalURL = url.appendingPathComponent(path)
+        var components = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+        components.scheme = url.scheme == "http" ? "ws" : (url.scheme == "https" ? "wss" : url.scheme)
+        components.path = path
+        components.queryItems = auth.map { URLQueryItem(name: $0.key, value: $0.value) }
+
+        guard let finalURL = components.url else {
+            notifySystem(event: "error", data: SocketError.webSocketUnavailable)
+            return
+        }
         engineIO.connect(url: finalURL, path: path, auth: auth)
         isConnected = true
         notifySystem(event: "connect_started", data: "Iniciando conexión personalizada.")
