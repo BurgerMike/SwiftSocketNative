@@ -6,6 +6,10 @@
 //
 
 import Foundation
+import SwiftUI
+
+// MARK: - Protocolo base para el cliente tipo Engine.IO
+
 
 public final class SwiftSocketIOClient: SocketClient {
     // MARK: - Estado y configuración
@@ -13,10 +17,9 @@ public final class SwiftSocketIOClient: SocketClient {
     private let path: String
     private let namespace: String
     private let auth: [String: String]
+    private let isTestMode: Bool
     
     private(set) var isConnected: Bool = false
-    private var webSocket: URLSessionWebSocketTask?
-    private let session: URLSession = .shared
     private let queue = DispatchQueue(label: "SwiftSocketIOClientQueue", attributes: .concurrent)
     
     private var systemListeners: [String: [(Any) -> Void]] = [:]
@@ -25,62 +28,47 @@ public final class SwiftSocketIOClient: SocketClient {
     private let ackManager = AckManager()
     private var ackCounter: Int = 0
     
+    private var engineIO: EngineIOClient = URLSessionEngineIOClient()
+    
     // MARK: - Inicialización
     public init(
         url: URL,
         path: String = "/socket.io",
         namespace: String = "/",
-        auth: [String: String] = [:]
+        auth: [String: String] = [:],
+        isTestMode: Bool = false
     ) {
         self.url = url
         self.path = path
         self.namespace = namespace
         self.auth = auth
+        self.isTestMode = isTestMode
     }
     
     public func connect() {
-        guard webSocket == nil else {
+        guard !isTestMode else {
+            print("🧪 Modo prueba activado: no se establecerá conexión real.")
+            notifySystem(event: "connect_test_mode", data: "Modo prueba activado.")
+            return
+        }
+        guard !isConnected else {
             notifySystem(event: "connect_skipped", data: "Ya hay conexión activa.")
             return
         }
-        
-        var components = URLComponents(url: url, resolvingAgainstBaseURL: false)!
-        components.path = path
-        components.queryItems = auth.map { URLQueryItem(name: $0.key, value: $0.value) }
-        
-        guard let finalURL = components.url else {
-            notifySystem(event: "error", data: SocketError.webSocketUnavailable)
-            return
-        }
-        
-        webSocket = session.webSocketTask(with: finalURL)
-        webSocket?.resume()
-        listen()
+        let finalURL = url.appendingPathComponent(path)
+        engineIO.connect(url: finalURL, path: path, auth: auth)
+        isConnected = true
+        notifySystem(event: "connect_started", data: "Iniciando conexión personalizada.")
+        startListening()
     }
     
-    private func listen() {
-        webSocket?.receive { [weak self] result in
-            switch result {
-            case .success(let message):
-                self?.handle(message)
-            case .failure(let error):
-                self?.notifySystem(event: "connect_error", data: error)
-            }
-            
-            self?.listen() // sigue escuchando
-        }
-    }
+    // private func listen() {
+    //     // Aquí va la lógica para escuchar mensajes con el cliente personalizado
+    // }
     
-    private func handle(_ message: URLSessionWebSocketTask.Message) {
-        switch message {
-        case .string(let text):
-            notifySystem(event: "message", data: text)
-        case .data(let data):
-            notifySystem(event: "data", data: data)
-        @unknown default:
-            notifySystem(event: "error", data: SocketError.custom("Tipo de mensaje desconocido"))
-        }
-    }
+    // private func handle(_ message: Any) {
+    //     // Aquí va la lógica para manejar mensajes recibidos con el cliente personalizado
+    // }
     
     public func emit<T: Encodable>(
         event: String,
@@ -115,12 +103,11 @@ public final class SwiftSocketIOClient: SocketClient {
             return
         }
         
-        webSocket?.send(.string(text)) { error in
-            if let error = error {
-                self.notifySystem(event: "error", data: error)
-                ack?(.failure(.custom(error.localizedDescription)))
-            }
+        if isTestMode {
+            print("🧪 Emitiendo mensaje en modo prueba: \(text)")
         }
+        
+        engineIO.send(message: text)
     }
     
     private func nextAckId() -> String {
@@ -131,24 +118,244 @@ public final class SwiftSocketIOClient: SocketClient {
     public func on(event: String, callback: @escaping (Any) -> Void) {
         eventListeners[event, default: []].append(callback)
     }
-
+    
     public func onSystem(event: String, callback: @escaping (Any) -> Void) {
         systemListeners[event, default: []].append(callback)
     }
-
+    
+    public func offSystem(event: String) {
+        systemListeners[event] = []
+    }
+    
+    public func offAll() {
+        eventListeners.removeAll()
+    }
+    
+    public func offAllSystem() {
+        systemListeners.removeAll()
+    }
+    
     private func notifySystem(event: String, data: Any) {
         systemListeners[event]?.forEach { $0(data) }
     }
-
+    
     public func off(event: String) {
         eventListeners[event] = []
     }
-
+    
     public func disconnect() {
         ackManager.cancelAll()
-        webSocket?.cancel(with: .goingAway, reason: nil)
-        webSocket = nil
+        engineIO.disconnect()
         isConnected = false
         notifySystem(event: "disconnect", data: "Socket cerrado.")
     }
+    
+    private func startListening() {
+        engineIO.listen { [weak self] message in
+            guard let self = self else { return }
+            // Intentamos decodificar el mensaje
+            guard let data = message.data(using: .utf8) else {
+                self.notifySystem(event: "error", data: SocketError.decodingFailed)
+                return
+            }
+            
+            // Estructura esperada: {"event": "nombre", "data": ...}
+            struct IncomingMessage: Decodable {
+                let event: String
+                let data: AnyCodable
+            }
+            
+            do {
+                let incoming = try JSONDecoder().decode(IncomingMessage.self, from: data)
+                self.eventListeners[incoming.event]?.forEach { $0(incoming.data.value) }
+            } catch {
+                self.notifySystem(event: "error", data: SocketError.decodingFailed)
+            }
+        }
+    }
+    
+    // MARK: - Finalización del cliente
+    public func finalize() {
+        disconnect()
+        offAll()
+        offAllSystem()
+        isConnected = false
+        print("🧹 Cliente limpiado y listo para pruebas o reinicio.")
+    }
+}
+
+final class URLSessionEngineIOClient: EngineIOClient {
+    private var socket: URLSessionWebSocketTask?
+    private let session: URLSession = .shared
+    
+    private var reconnectAttempts = 0
+    private let maxReconnectAttempts = 5
+    private let reconnectDelay: TimeInterval = 3
+    private var pingTimer: Timer?
+    private var lastPong: Date = Date()
+    
+    private var currentURL: URL?
+    private var currentPath: String = ""
+    private var currentAuth: [String: String] = [:]
+
+    func connect(url: URL, path: String, auth: [String: String]) {
+        currentURL = url
+        currentPath = path
+        currentAuth = auth
+        
+        var components = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+        components.queryItems = auth.map { URLQueryItem(name: $0.key, value: $0.value) }
+
+        guard let finalURL = components.url else {
+            print("❌ URL inválida para conexión WebSocket")
+            return
+        }
+
+        socket = session.webSocketTask(with: finalURL)
+        socket?.resume()
+
+        // Emite evento de intento de conexión
+        print("🔄 Intentando conectar a \(finalURL)")
+        SwiftSocketIOClient.sharedNotifySystem(event: "reconnect_attempt", data: reconnectAttempts)
+        reconnectAttempts = 0
+        startPing()
+    }
+
+    func send(message: String) {
+        socket?.send(.string(message)) { error in
+            if let error = error {
+                print("❌ Error al enviar mensaje:", error)
+            }
+        }
+    }
+
+    func listen(onMessage: @escaping (String) -> Void) {
+        socket?.receive { [weak self] result in
+            guard let self = self else { return }
+            switch result {
+            case .success(let message):
+                switch message {
+                case .string(let text):
+                    onMessage(text)
+                case .data(let data):
+                    if let string = String(data: data, encoding: .utf8) {
+                        onMessage(string)
+                    } else {
+                        print("⚠️ Mensaje binario no interpretable")
+                    }
+                default:
+                    break // Ya no intentamos usar `.pong`
+                }
+            case .failure(let error):
+                print("❌ Error al recibir mensaje:", error)
+                
+                SwiftSocketIOClient.sharedNotifySystem(event: "connect_error", data: error.localizedDescription)
+                self.reconnectAttempts += 1
+                if self.reconnectAttempts <= self.maxReconnectAttempts {
+                    print("🔁 Reintentando conexión... (\(self.reconnectAttempts))")
+                    SwiftSocketIOClient.sharedNotifySystem(event: "reconnect_attempt", data: self.reconnectAttempts)
+                    let reconnectDelay = self.reconnectDelay
+                    
+                } else {
+                    let errorMessage = "Falló reconexión después de \(self.reconnectAttempts) intentos."
+                    SwiftSocketIOClient.sharedNotifySystem(event: "reconnect_failed", data: errorMessage)
+                    print("❌ \(errorMessage)")
+                }
+            }
+
+            self.listen(onMessage: onMessage) // Reanuda el bucle de escucha
+        }
+    }
+
+    func disconnect() {
+        stopPing()
+        socket?.cancel(with: .goingAway, reason: nil)
+        socket = nil
+    }
+    
+    private func startPing() {
+        stopPing()
+        lastPong = Date() // Resetea la marca de tiempo antes del siguiente ping
+        pingTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
+            self?.sendPing()
+        }
+    }
+
+    private func stopPing() {
+        pingTimer?.invalidate()
+        pingTimer = nil
+    }
+
+    private func sendPing() {
+        guard let socket = socket else { return }
+        lastPong = Date()
+        socket.sendPing { error in
+            if let error = error {
+                print("❌ Ping error:", error)
+                SwiftSocketIOClient.sharedNotifySystem(event: "connect_timeout", data: error.localizedDescription)
+            } else {
+                print("📡 Ping enviado")
+                SwiftSocketIOClient.sharedNotifySystem(event: "ping", data: Date())
+            }
+        }
+    }
+}
+
+// MARK: - AnyCodable para decodificación dinámica
+struct AnyCodable: Codable {
+    let value: Any
+
+    init(_ value: Any) {
+        self.value = value
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let int = try? container.decode(Int.self) {
+            value = int
+        } else if let double = try? container.decode(Double.self) {
+            value = double
+        } else if let bool = try? container.decode(Bool.self) {
+            value = bool
+        } else if let string = try? container.decode(String.self) {
+            value = string
+        } else if let dict = try? container.decode([String: AnyCodable].self) {
+            value = dict.mapValues { $0.value }
+        } else if let array = try? container.decode([AnyCodable].self) {
+            value = array.map { $0.value }
+        } else {
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Tipo no soportado")
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch value {
+        case let int as Int:
+            try container.encode(int)
+        case let double as Double:
+            try container.encode(double)
+        case let bool as Bool:
+            try container.encode(bool)
+        case let string as String:
+            try container.encode(string)
+        case let dict as [String: Any]:
+            try container.encode(dict.mapValues { AnyCodable($0) })
+        case let array as [Any]:
+            try container.encode(array.map { AnyCodable($0) })
+        default:
+            throw EncodingError.invalidValue(value, .init(codingPath: container.codingPath, debugDescription: "Tipo no soportado"))
+        }
+    }
+}
+
+extension SwiftSocketIOClient {
+    static func sharedNotifySystem(event: String, data: Any) {
+        // Notificación global si el socket está en uso
+        NotificationCenter.default.post(name: .socketSystemEvent, object: nil, userInfo: ["event": event, "data": data])
+    }
+}
+
+extension Notification.Name {
+    static let socketSystemEvent = Notification.Name("socketSystemEvent")
 }

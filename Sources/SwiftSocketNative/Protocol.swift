@@ -59,3 +59,12 @@ public protocol IncomingMessageRepresentable {
     var timestamp: Date { get }
     var metadata: [String: String]? { get }
 }
+
+// MARK: - Protocolo base para el cliente tipo Engine.IO
+public protocol EngineIOClient {
+    func connect(url: URL, path: String, auth: [String: String])
+    func send(message: String)
+    func disconnect()
+    func listen(onMessage: @escaping (String) -> Void)
+}
+
