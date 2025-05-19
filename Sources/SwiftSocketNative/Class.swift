@@ -304,6 +304,19 @@ final class URLSessionEngineIOClient: EngineIOClient {
         socket = session.webSocketTask(with: finalURL)
         socket?.resume()
 
+        // Enviar 'auth' como mensaje inicial simulando handshake de Socket.IO
+        let authPayload = ["auth": auth]
+        if let data = try? JSONSerialization.data(withJSONObject: authPayload),
+           let jsonString = String(data: data, encoding: .utf8) {
+            socket?.send(.string(jsonString)) { error in
+                if let error = error {
+                    print("❌ Error al enviar auth manual:", error)
+                } else {
+                    print("✅ Auth enviado al servidor: \(jsonString)")
+                }
+            }
+        }
+
         // Emite evento de intento de conexión
         print("🔄 Intentando conectar a \(finalURL)")
         SwiftSocketIOClient.sharedNotifySystem(event: "reconnect_attempt", data: reconnectAttempts)
