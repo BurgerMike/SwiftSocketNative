@@ -20,10 +20,12 @@ public final class SwiftSocketIOClient: SocketClient {
     private let isTestMode: Bool
     
     private(set) var isConnected: Bool = false
+    private(set) public var socketID: String?
     private let queue = DispatchQueue(label: "SwiftSocketIOClientQueue", attributes: .concurrent)
     
     private var systemListeners: [String: [(Any) -> Void]] = [:]
     private var eventListeners: [String: [(Any) -> Void]] = [:]
+    private var onceListeners: [String: [(Any) -> Void]] = [:]
     
     private let ackManager = AckManager()
     private var ackCounter: Int = 0
@@ -90,9 +92,10 @@ public final class SwiftSocketIOClient: SocketClient {
             ack?(.failure(.notConnected))
             return
         }
-        
-        let id = nextAckId()
-        if let ack = ack {
+
+        let id = ack != nil ? nextAckId() : nil
+
+        if let ack = ack, let id = id {
             ackManager.addAck(id: id, timeout: 5, callback: { result in
                 switch result {
                 case .success: ack(.success(()))
@@ -100,24 +103,26 @@ public final class SwiftSocketIOClient: SocketClient {
                 }
             })
         }
-        
+
         let eventPayload = OutgoingMessage(
             event: event,
             payloadObject: data,
-            recipientId: nil
+            recipientId: nil,
+            metadata: nil,
+            ackId: id
         )
-        
+
         guard let json = try? JSONEncoder().encode(eventPayload),
               let text = String(data: json, encoding: .utf8)
         else {
             ack?(.failure(.encodingFailed))
             return
         }
-        
+
         if isTestMode {
             print("🧪 Emitiendo mensaje en modo prueba: \(text)")
         }
-        
+
         engineIO.send(message: text)
     }
     
@@ -128,6 +133,10 @@ public final class SwiftSocketIOClient: SocketClient {
     
     public func on(event: String, callback: @escaping (Any) -> Void) {
         eventListeners[event, default: []].append(callback)
+    }
+    
+    public func once(event: String, callback: @escaping (Any) -> Void) {
+        onceListeners[event, default: []].append(callback)
     }
     
     public func onSystem(event: String, callback: @escaping (Any) -> Void) {
@@ -169,16 +178,30 @@ public final class SwiftSocketIOClient: SocketClient {
                 self.notifySystem(event: "error", data: SocketError.decodingFailed)
                 return
             }
-            
-            // Estructura esperada: {"event": "nombre", "data": ...}
+
             struct IncomingMessage: Decodable {
                 let event: String
                 let data: AnyCodable
+                let ackId: String?
+                let socketId: String?
             }
-            
+
             do {
                 let incoming = try JSONDecoder().decode(IncomingMessage.self, from: data)
+
+                if let ackId = incoming.ackId {
+                    self.ackManager.resolveAck(id: ackId, with: incoming.data.value)
+                }
+                if let sid = incoming.socketId {
+                    self.socketID = sid
+                }
+
                 self.eventListeners[incoming.event]?.forEach { $0(incoming.data.value) }
+                if let onceList = self.onceListeners[incoming.event] {
+                    onceList.forEach { $0(incoming.data.value) }
+                    self.onceListeners[incoming.event] = nil
+                }
+
             } catch {
                 self.notifySystem(event: "error", data: SocketError.decodingFailed)
             }

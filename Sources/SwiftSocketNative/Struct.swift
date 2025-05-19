@@ -25,16 +25,19 @@ public struct OutgoingMessage: Codable, Sendable, Equatable, OutgoingMessageRepr
     public let payload: Data?
     public let recipientId: String?
     public let metadata: [String: String]?
+    public let ackId: String?
 
     public init<T: Encodable>(
         event: String,
         payloadObject: T?,
         recipientId: String? = nil,
-        metadata: [String: String]? = nil
+        metadata: [String: String]? = nil,
+        ackId: String? = nil
     ) {
         self.event = event
         self.recipientId = recipientId
         self.metadata = metadata
+        self.ackId = ackId
         self.payload = payloadObject.flatMap { try? JSONEncoder().encode($0) }
     }
 }
@@ -46,18 +49,24 @@ public struct IncomingMessage: Codable, Sendable, Equatable, IncomingMessageRepr
     public let senderId: String
     public let timestamp: Date
     public let metadata: [String: String]?
+    public let ackId: String?
+    public let socketId: String?
     
     public init(
         event: String,
         content: String,
         senderId: String,
         timestamp: Date = .now,
-        metadata: [String: String]? = nil
+        metadata: [String: String]? = nil,
+        ackId: String? = nil,
+        socketId: String? = nil
     ) {
         self.event = event
         self.content = content
         self.senderId = senderId
         self.timestamp = timestamp
         self.metadata = metadata
+        self.ackId = ackId
+        self.socketId = socketId
     }
 }

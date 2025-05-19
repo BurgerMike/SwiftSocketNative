@@ -12,6 +12,9 @@ public enum SocketError: Error, CustomStringConvertible, Equatable, Sendable {
     case encodingFailed
     case decodingFailed
     case ackTimeout
+    case connectionTimeout
+    case reconnectFailed
+    case unknownEvent(String)
     case custom(String)
 
     public var description: String {
@@ -21,6 +24,9 @@ public enum SocketError: Error, CustomStringConvertible, Equatable, Sendable {
         case .encodingFailed: return "Fallo al codificar los datos."
         case .decodingFailed: return "Fallo al decodificar los datos recibidos."
         case .ackTimeout: return "Tiempo de espera para el ACK superado."
+        case .connectionTimeout: return "La conexión ha excedido el tiempo de espera."
+        case .reconnectFailed: return "No se logró reconectar después de múltiples intentos."
+        case .unknownEvent(let name): return "Evento desconocido: \(name)"
         case .custom(let msg): return msg
         }
     }

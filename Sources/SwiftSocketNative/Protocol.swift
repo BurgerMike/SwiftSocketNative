@@ -10,6 +10,9 @@ import Foundation
 
 /// Protocolo base para un cliente de sockets nativo en Swift.
 public protocol SocketClient {
+    /// Identificador del socket.
+    var socketID: String? { get }
+
     /// Inicia la conexión con el servidor.
     func connect()
 
