@@ -293,7 +293,8 @@ final class URLSessionEngineIOClient: EngineIOClient {
             print("❌ URL inválida para conexión WebSocket")
             return
         }
-        components.queryItems = auth.map { URLQueryItem(name: $0.key, value: $0.value) }
+        // La siguiente línea está comentada para evitar que los datos de 'auth' se envíen como parámetros en la URL.
+        // components.queryItems = auth.map { URLQueryItem(name: $0.key, value: $0.value) }
 
         guard let finalURL = components.url else {
             print("❌ URL inválida para conexión WebSocket")
