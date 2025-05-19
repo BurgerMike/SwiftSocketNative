@@ -51,6 +51,7 @@ public struct IncomingMessage: Codable, Sendable, Equatable, IncomingMessageRepr
     public let metadata: [String: String]?
     public let ackId: String?
     public let socketId: String?
+    public let payload: Data?
     
     public init(
         event: String,
@@ -59,7 +60,8 @@ public struct IncomingMessage: Codable, Sendable, Equatable, IncomingMessageRepr
         timestamp: Date = .now,
         metadata: [String: String]? = nil,
         ackId: String? = nil,
-        socketId: String? = nil
+        socketId: String? = nil,
+        payload: Data? = nil
     ) {
         self.event = event
         self.content = content
@@ -68,5 +70,13 @@ public struct IncomingMessage: Codable, Sendable, Equatable, IncomingMessageRepr
         self.metadata = metadata
         self.ackId = ackId
         self.socketId = socketId
+        self.payload = payload
+    }
+}
+
+public extension IncomingMessage {
+    func decodePayload<T: Decodable>(as type: T.Type) -> T? {
+        guard let payload else { return nil }
+        return try? JSONDecoder().decode(T.self, from: payload)
     }
 }

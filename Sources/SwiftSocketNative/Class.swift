@@ -19,12 +19,18 @@ public final class SwiftSocketIOClient: SocketClient {
     private let auth: [String: String]
     private let isTestMode: Bool
     
+    private var reconnectStrategy: ReconnectStrategy?
+    private var middleware: [SocketMiddleware] = []
+    private var logger: SocketLogger?
+    private var storage: SocketStorage?
+    
     private(set) var isConnected: Bool = false
     private(set) public var socketID: String?
     private let queue = DispatchQueue(label: "SwiftSocketIOClientQueue", attributes: .concurrent)
-    
+
+    private var anyListeners: [(String, Any) -> Void] = []
     private var systemListeners: [String: [(Any) -> Void]] = [:]
-    private var eventListeners: [String: [(Any) -> Void]] = [:]
+    private var eventListeners: [String: [(id: UUID, callback: (Any) -> Void)]] = [:]
     private var onceListeners: [String: [(Any) -> Void]] = [:]
     
     private let ackManager = AckManager()
@@ -38,13 +44,21 @@ public final class SwiftSocketIOClient: SocketClient {
         path: String = "/socket.io",
         namespace: String = "/",
         auth: [String: String] = [:],
-        isTestMode: Bool = false
+        isTestMode: Bool = false,
+        reconnectStrategy: ReconnectStrategy? = nil,
+        middleware: [SocketMiddleware] = [],
+        logger: SocketLogger? = nil,
+        storage: SocketStorage? = nil
     ) {
         self.url = url
         self.path = path
         self.namespace = namespace
         self.auth = auth
         self.isTestMode = isTestMode
+        self.reconnectStrategy = reconnectStrategy
+        self.middleware = middleware
+        self.logger = logger
+        self.storage = storage
     }
     
     public func connect() {
@@ -111,6 +125,8 @@ public final class SwiftSocketIOClient: SocketClient {
             metadata: nil,
             ackId: id
         )
+        
+        storage?.storeOutgoingMessage(eventPayload)
 
         guard let json = try? JSONEncoder().encode(eventPayload),
               let text = String(data: json, encoding: .utf8)
@@ -131,12 +147,33 @@ public final class SwiftSocketIOClient: SocketClient {
         return "\(ackCounter)"
     }
     
-    public func on(event: String, callback: @escaping (Any) -> Void) {
-        eventListeners[event, default: []].append(callback)
+    @discardableResult
+    public func on(event: String, callback: @escaping (Any) -> Void) -> UUID {
+        let id = UUID()
+        eventListeners[event, default: []].append((id: id, callback: callback))
+        return id
+    }
+    
+    public func on<T: Decodable>(
+        event: String,
+        decodeTo type: T.Type,
+        callback: @escaping (T) -> Void
+    ) {
+        on(event: event) { raw in
+            if let dict = raw as? [String: Any],
+               let data = try? JSONSerialization.data(withJSONObject: dict),
+               let decoded = try? JSONDecoder().decode(T.self, from: data) {
+                callback(decoded)
+            }
+        }
     }
     
     public func once(event: String, callback: @escaping (Any) -> Void) {
         onceListeners[event, default: []].append(callback)
+    }
+
+    public func onAny(callback: @escaping (String, Any) -> Void) {
+        anyListeners.append(callback)
     }
     
     public func onSystem(event: String, callback: @escaping (Any) -> Void) {
@@ -161,6 +198,10 @@ public final class SwiftSocketIOClient: SocketClient {
     
     public func off(event: String) {
         eventListeners[event] = []
+    }
+    
+    public func off(event: String, callbackId: UUID) {
+        eventListeners[event]?.removeAll { $0.id == callbackId }
     }
     
     public func disconnect() {
@@ -196,11 +237,23 @@ public final class SwiftSocketIOClient: SocketClient {
                     self.socketID = sid
                 }
 
-                self.eventListeners[incoming.event]?.forEach { $0(incoming.data.value) }
-                if let onceList = self.onceListeners[incoming.event] {
-                    onceList.forEach { $0(incoming.data.value) }
-                    self.onceListeners[incoming.event] = nil
+                let reduced = self.middleware.reduce((incoming.event, incoming.data.value)) { result, mw in
+                    mw.process(event: result.0, data: result.1) ?? result
                 }
+                
+                guard let processed = Optional(reduced) else {
+                    self.logger?.log(event: "middleware_blocked", data: incoming.event)
+                    return
+                }
+                let finalEvent = processed.0
+                let finalData = processed.1
+
+                self.eventListeners[finalEvent]?.forEach { $0.callback(finalData) }
+                if let onceList = self.onceListeners[finalEvent] {
+                    onceList.forEach { $0(finalData) }
+                    self.onceListeners[finalEvent] = nil
+                }
+                self.anyListeners.forEach { $0(finalEvent, finalData) }
 
             } catch {
                 self.notifySystem(event: "error", data: SocketError.decodingFailed)
@@ -399,4 +452,16 @@ extension SwiftSocketIOClient {
 
 extension Notification.Name {
     static let socketSystemEvent = Notification.Name("socketSystemEvent")
+}
+
+public func onAny(callback: @escaping (String, Any) -> Void) {
+    // Se asume instancia singleton o de uso global, o bien acceso a instancia.
+    // Aquí se muestra cómo agregarlo a la instancia global si existiera.
+    // Si es una función global, debe acceder a la instancia correspondiente.
+    // Por ejemplo, si tienes una instancia compartida:
+    // SwiftSocketIOClient.shared.anyListeners.append(callback)
+    // Pero aquí, como ejemplo, se deja como comentario.
+    // Implementación típica:
+    // (esto requiere acceso a la instancia del cliente, que no está definida aquí)
+    // client.anyListeners.append(callback)
 }
