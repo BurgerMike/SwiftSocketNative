@@ -55,7 +55,10 @@ public final class SwiftSocketIOClient: SocketClient {
             notifySystem(event: "connect_skipped", data: "Ya hay conexión activa.")
             return
         }
-        var components = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            notifySystem(event: "error", data: SocketError.webSocketUnavailable)
+            return
+        }
         components.scheme = url.scheme == "http" ? "ws" : (url.scheme == "https" ? "wss" : url.scheme)
         components.path = path
         components.queryItems = auth.map { URLQueryItem(name: $0.key, value: $0.value) }
@@ -211,7 +214,10 @@ final class URLSessionEngineIOClient: EngineIOClient {
         currentPath = path
         currentAuth = auth
         
-        var components = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            print("❌ URL inválida para conexión WebSocket")
+            return
+        }
         components.queryItems = auth.map { URLQueryItem(name: $0.key, value: $0.value) }
 
         guard let finalURL = components.url else {
